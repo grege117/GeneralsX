@@ -33,6 +33,49 @@
 #include "Win32Device/Common/Win32LocalFileSystem.h"
 #include "Win32Device/Common/Win32LocalFile.h"
 #include <io.h>
+#include <stdio.h>
+#include <ctype.h>
+
+// GeneralsX @bugfix felipebraz 18/11/2026 Asset root fallback for loose files.
+// Retail Windows launches from the install directory, but a portable GeneralsX workspace can keep the
+// executable elsewhere and pass the data directory via -assetPath. Loose-only assets (for example
+// Data\Scripts\SkirmishScripts.scb, Data\Cursors\*.ani) then live outside the working directory.
+static AsciiString s_win32AssetRootPath;
+
+static Bool isAbsoluteWindowsPath(const char* filename)
+{
+	if (filename == nullptr || *filename == '\0') {
+		return FALSE;
+	}
+	if (filename[0] == '\\' || filename[0] == '/') {
+		return TRUE;
+	}
+	return (isalpha((unsigned char)filename[0]) != 0 && filename[1] == ':');
+}
+
+static AsciiString resolveLoosePath(const char* filename)
+{
+	if (filename == nullptr || *filename == '\0') {
+		return AsciiString::TheEmptyString;
+	}
+	if (isAbsoluteWindowsPath(filename)) {
+		return AsciiString(filename);
+	}
+	if (_access(filename, 0) == 0) {
+		return AsciiString(filename);
+	}
+	if (s_win32AssetRootPath.isNotEmpty()) {
+		AsciiString candidate = s_win32AssetRootPath;
+		if (!candidate.endsWith("\\") && !candidate.endsWith("/")) {
+			candidate.concat('\\');
+		}
+		candidate.concat(filename);
+		if (_access(candidate.str(), 0) == 0) {
+			return candidate;
+		}
+	}
+	return AsciiString(filename);
+}
 
 Win32LocalFileSystem::Win32LocalFileSystem() : LocalFileSystem()
 {
@@ -49,6 +92,12 @@ File * Win32LocalFileSystem::openFile(const Char *filename, Int access, size_t b
 	// sanity check
 	if (*filename == '\0') {
 		return nullptr;
+	}
+
+	AsciiString resolvedPath;
+	if (!(access & File::WRITE)) {
+		resolvedPath = resolveLoosePath(filename);
+		filename = resolvedPath.str();
 	}
 
 	if (access & File::WRITE) {
@@ -116,7 +165,9 @@ void Win32LocalFileSystem::reset()
 Bool Win32LocalFileSystem::doesFileExist(const Char *filename) const
 {
 	//USE_PERF_TIMER(Win32LocalFileSystem_doesFileExist)
-	if (_access(filename, 0) == 0) {
+	// GeneralsX @bugfix felipebraz 18/11/2026 Resolve loose files from the asset root when the cwd differs.
+	AsciiString resolvedPath = resolveLoosePath(filename);
+	if (_access(resolvedPath.str(), 0) == 0) {
 		return TRUE;
 	}
 
@@ -189,7 +240,9 @@ Bool Win32LocalFileSystem::getFileInfo(const AsciiString& filename, FileInfo *fi
 {
 	WIN32_FIND_DATA findData;
 	HANDLE findHandle = nullptr;
-	findHandle = FindFirstFile(filename.str(), &findData);
+	// GeneralsX @bugfix felipebraz 18/11/2026 Resolve loose files from the asset root when the cwd differs.
+	AsciiString resolvedPath = resolveLoosePath(filename.str());
+	findHandle = FindFirstFile(resolvedPath.str(), &findData);
 
 	if (findHandle == INVALID_HANDLE_VALUE) {
 		return FALSE;
@@ -211,6 +264,17 @@ Bool Win32LocalFileSystem::createDirectory(AsciiString directory)
 		return (CreateDirectory(directory.str(), nullptr) != 0);
 	}
 	return FALSE;
+}
+
+// GeneralsX @bugfix felipebraz 18/11/2026 Receive the resolved asset root from BIGFileSystem so relative
+// loose-file paths can be resolved from the game data directory instead of the process working directory.
+void Win32LocalFileSystem::setAssetRootPath(const AsciiString& path)
+{
+	s_win32AssetRootPath = path;
+	if (s_win32AssetRootPath.isNotEmpty()) {
+		fprintf(stderr, "[ASSET_ROOT] Win32LocalFileSystem asset root fallback set to '%s'\n", s_win32AssetRootPath.str());
+		fflush(stderr);
+	}
 }
 
 AsciiString Win32LocalFileSystem::normalizePath(const AsciiString& filePath) const

@@ -49,5 +49,10 @@ public:
 	virtual Bool createDirectory(AsciiString directory) override;
 	virtual AsciiString normalizePath(const AsciiString& filePath) const override;
 
+	// GeneralsX @bugfix felipebraz 18/11/2026 Set the asset root as a fallback search directory for
+	// relative loose-file paths. The process working directory is not always the game data directory
+	// (e.g. when a portable workspace is launched with -assetPath).
+	virtual void setAssetRootPath(const AsciiString& path) override;
+
 protected:
 };
